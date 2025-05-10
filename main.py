@@ -39,6 +39,7 @@ def check_credentials(username, password):
     if not username or not password:
         return False, "Username and password cannot be blank"
 
+
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
             with conn.cursor() as cur:
@@ -176,7 +177,7 @@ class LoginApp(QWidget):
         self.login_button.clicked.connect(self.handle_login)
 
         self.register_button = QPushButton('Need an account? Register')
-        self.register_button.clicked.connect(self.switch_to_register)
+        self.register_button.clicked.connect(self.switch_to_register)  # This line was correct
 
         layout.addWidget(self.username_label)
         layout.addWidget(self.username_input)
@@ -187,9 +188,21 @@ class LoginApp(QWidget):
 
         self.setLayout(layout)
 
+    def switch_to_register(self):
+        self.stacked_widget.setCurrentIndex(0)
+        self.username_input.clear()
+        self.password_input.clear()
+
     def handle_login(self):
         username = self.username_input.text().strip()
         password = self.password_input.text().strip()
+
+        if not username or not password:
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Warning)
+            msg.setText("Username and password cannot be blank")
+            msg.exec_()
+            return
 
         success, message, username = check_credentials(username, password)
 
@@ -205,11 +218,6 @@ class LoginApp(QWidget):
             msg.setIcon(QMessageBox.Warning)
             msg.setText(message)
             msg.exec_()
-
-    def switch_to_register(self):
-        self.stacked_widget.setCurrentIndex(0)
-        self.username_input.clear()
-        self.password_input.clear()
 
 
 class MainApp(QWidget):
