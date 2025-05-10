@@ -2,7 +2,7 @@ import psycopg2
 from psycopg2 import sql, errors
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel,
                              QLineEdit, QPushButton, QMessageBox, QStackedWidget,
-                             QTextEdit, QHBoxLayout, QScrollArea, QFrame)
+                             QTextEdit, QHBoxLayout, QScrollArea, QFrame, QDialog)
 from PyQt5.QtCore import Qt
 import datetime
 
@@ -13,6 +13,7 @@ DB_PARAMS = {
     'password': '2023494',
     'host': 'localhost'
 }
+
 
 
 def register_user(username, password):
@@ -96,7 +97,68 @@ def get_all_posts():
         print(f"Unexpected error: {e}")
         return []
 
+# Add these new database functions
+def follow_user(follower, following):
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT follow_user(%s, %s)", (follower, following))
+                result = cur.fetchone()[0]
+                conn.commit()
+                return result, "Followed successfully" if result else "Already following"
+    except Exception as e:
+        return False, f"Error: {str(e)}"
 
+def unfollow_user(follower, following):
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT unfollow_user(%s, %s)", (follower, following))
+                result = cur.fetchone()[0]
+                conn.commit()
+                return result, "Unfollowed successfully" if result else "Not following"
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+def is_following(follower, following):
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT is_following(%s, %s)", (follower, following))
+                return cur.fetchone()[0]
+    except Exception as e:
+        print(f"Error checking follow status: {e}")
+        return False
+
+def get_following(username):
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM get_following(%s)", (username,))
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting following list: {e}")
+        return []
+
+def get_followers(username):
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM get_followers(%s)", (username,))
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting followers list: {e}")
+        return []
+
+def get_followed_posts(username):
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM get_followed_posts(%s)", (username,))
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting followed posts: {e}")
+        return []
 class RegistrationApp(QWidget):
     def __init__(self, stacked_widget):
         super().__init__()
@@ -225,6 +287,7 @@ class MainApp(QWidget):
         super().__init__()
         self.stacked_widget = stacked_widget
         self.username = None
+        self.current_profile_view = None  # Track which profile we're viewing
         self.init_ui()
 
     def set_user(self, username):
@@ -240,16 +303,23 @@ class MainApp(QWidget):
         self.welcome_label = QLabel("Welcome to the Application!")
         layout.addWidget(self.welcome_label)
 
+        # Add profile button
+        self.profile_btn = QPushButton("My Profile")
+        self.profile_btn.clicked.connect(self.show_own_profile)
+        layout.addWidget(self.profile_btn)
+
         # Tab buttons
         button_layout = QHBoxLayout()
         self.create_post_btn = QPushButton("Create Post")
         self.create_post_btn.clicked.connect(self.show_create_post)
         self.feed_btn = QPushButton("View Feed")
         self.feed_btn.clicked.connect(self.show_feed)
+        self.following_feed_btn = QPushButton("Following Feed")
+        self.following_feed_btn.clicked.connect(self.show_following_feed)
         button_layout.addWidget(self.create_post_btn)
         button_layout.addWidget(self.feed_btn)
+        button_layout.addWidget(self.following_feed_btn)
         layout.addLayout(button_layout)
-
         # Stacked widget for different views
         self.main_stack = QStackedWidget()
 
@@ -286,6 +356,12 @@ class MainApp(QWidget):
         layout.addWidget(self.main_stack)
         self.setLayout(layout)
 
+    def show_following_feed(self):
+        """Show only posts from users the current user follows"""
+        self.main_stack.setCurrentIndex(1)  # Show the feed view
+        self.refresh_feed(following_only=True)
+
+
     def show_create_post(self):
         self.main_stack.setCurrentIndex(0)
 
@@ -308,18 +384,26 @@ class MainApp(QWidget):
         msg.setText(message)
         msg.exec_()
 
-    def refresh_feed(self):
+    def refresh_feed(self, following_only=False):
         # Clear existing feed
         for i in reversed(range(self.scroll_layout.count())):
-            self.scroll_layout.itemAt(i).widget().setParent(None)
+            widget = self.scroll_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
 
-        # Get all posts from database
-        posts = get_all_posts()
-
-        if not posts:
-            no_posts_label = QLabel("No posts yet. Be the first to post!")
-            self.scroll_layout.addWidget(no_posts_label)
-            return
+        # Get posts
+        if following_only:
+            posts = get_followed_posts(self.username)
+            if not posts:
+                no_posts_label = QLabel("No posts from people you follow yet.")
+                self.scroll_layout.addWidget(no_posts_label)
+                return
+        else:
+            posts = get_all_posts()
+            if not posts:
+                no_posts_label = QLabel("No posts yet. Be the first to post!")
+                self.scroll_layout.addWidget(no_posts_label)
+                return
 
         for post in posts:
             post_id, username, content, created_at = post
@@ -327,25 +411,113 @@ class MainApp(QWidget):
             post_layout = QVBoxLayout()
 
             # Header with username and timestamp
-            header = QLabel(f"{username} • {created_at.strftime('%Y-%m-%d %H:%M')}")
-            header.setStyleSheet("font-weight: bold; color: #555;")
+            header = QHBoxLayout()
+            username_btn = QPushButton(username)
+            username_btn.setStyleSheet("border: none; color: blue; text-align: left;")
+            username_btn.clicked.connect(lambda _, u=username: self.show_user_profile(u))
+            header.addWidget(username_btn)
+            header.addStretch()
+            header.addWidget(QLabel(created_at.strftime('%Y-%m-%d %H:%M')))
 
             # Content
             content_label = QLabel(content)
             content_label.setWordWrap(True)
             content_label.setStyleSheet("padding: 5px;")
 
+            # Follow button (if viewing someone else's post)
+            if username != self.username:
+                follow_btn = QPushButton()
+                follow_btn.setCheckable(True)
+                follow_btn.setChecked(is_following(self.username, username))
+                follow_btn.setText("Following" if follow_btn.isChecked() else "Follow")
+                follow_btn.clicked.connect(lambda _, u=username: self.toggle_follow(u))
+                post_layout.addWidget(follow_btn)
+
             # Separator
             separator = QFrame()
             separator.setFrameShape(QFrame.HLine)
             separator.setFrameShadow(QFrame.Sunken)
 
-            post_layout.addWidget(header)
+            post_layout.addLayout(header)
             post_layout.addWidget(content_label)
             post_layout.addWidget(separator)
 
             post_widget.setLayout(post_layout)
             self.scroll_layout.addWidget(post_widget)
+
+    def toggle_follow(self, username):
+        if is_following(self.username, username):
+            success, message = unfollow_user(self.username, username)
+        else:
+            success, message = follow_user(self.username, username)
+
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Information if success else QMessageBox.Warning)
+        msg.setText(message)
+        msg.exec_()
+        self.refresh_feed()
+
+    def show_user_profile(self, username):
+        self.current_profile_view = username
+        profile_dialog = QDialog(self)
+        profile_dialog.setWindowTitle(f"{username}'s Profile")
+        layout = QVBoxLayout()
+
+        # Profile header
+        header = QHBoxLayout()
+        header.addWidget(QLabel(f"Username: {username}"))
+
+        # Follow button (if not viewing own profile)
+        if username != self.username:
+            follow_btn = QPushButton()
+            follow_btn.setCheckable(True)
+            follow_btn.setChecked(is_following(self.username, username))
+            follow_btn.setText("Following" if follow_btn.isChecked() else "Follow")
+            follow_btn.clicked.connect(lambda: self.toggle_follow(username))
+            header.addWidget(follow_btn)
+
+        layout.addLayout(header)
+
+        # Stats
+        stats = QHBoxLayout()
+        followers = get_followers(username)
+        following = get_following(username)
+        stats.addWidget(QLabel(f"Followers: {len(followers)}"))
+        stats.addWidget(QLabel(f"Following: {len(following)}"))
+        layout.addLayout(stats)
+
+        # User's posts
+        posts_label = QLabel("Posts:")
+        layout.addWidget(posts_label)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setAlignment(Qt.AlignTop)
+        scroll.setWidget(scroll_content)
+
+        user_posts = [p for p in get_all_posts() if p[1] == username]
+        for post in user_posts:
+            post_id, _, content, created_at = post
+            post_widget = QWidget()
+            post_layout = QVBoxLayout()
+
+            content_label = QLabel(content)
+            content_label.setWordWrap(True)
+            timestamp_label = QLabel(created_at.strftime('%Y-%m-%d %H:%M'))
+
+            post_layout.addWidget(content_label)
+            post_layout.addWidget(timestamp_label)
+            post_widget.setLayout(post_layout)
+            scroll_layout.addWidget(post_widget)
+
+        layout.addWidget(scroll)
+        profile_dialog.setLayout(layout)
+        profile_dialog.exec_()
+
+    def show_own_profile(self):
+        self.show_user_profile(self.username)
 
 
 if __name__ == '__main__':
