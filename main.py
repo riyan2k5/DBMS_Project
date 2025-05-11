@@ -2,7 +2,7 @@ import psycopg2
 from psycopg2 import sql, errors
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel,
                              QLineEdit, QPushButton, QMessageBox, QStackedWidget,
-                             QTextEdit, QHBoxLayout, QScrollArea, QFrame, QDialog)
+                             QTextEdit, QHBoxLayout, QScrollArea, QFrame, QDialog, QListWidgetItem, QListWidget)
 from PyQt5.QtCore import Qt
 import datetime
 
@@ -13,7 +13,6 @@ DB_PARAMS = {
     'password': '2023494',
     'host': 'localhost'
 }
-
 
 
 def register_user(username, password):
@@ -40,16 +39,14 @@ def check_credentials(username, password):
     if not username or not password:
         return False, "Username and password cannot be blank"
 
-
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
             with conn.cursor() as cur:
-                # Changed to just check if user exists since we don't have an ID
                 query = sql.SQL("SELECT username FROM users WHERE username = %s AND password = %s")
                 cur.execute(query, (username, password))
                 user = cur.fetchone()
                 if user:
-                    return True, "Login successful", username  # Return username instead of ID
+                    return True, "Login successful", username
                 else:
                     return False, "Invalid username or password", None
     except errors.DatabaseError as e:
@@ -66,7 +63,6 @@ def create_post(username, content):
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
             with conn.cursor() as cur:
-                # Changed to use username directly since we don't have user_id
                 query = sql.SQL("INSERT INTO posts (username, content) VALUES (%s, %s)")
                 cur.execute(query, (username, content))
                 conn.commit()
@@ -82,7 +78,6 @@ def get_all_posts():
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
             with conn.cursor() as cur:
-                # Simplified query since we're storing username directly in posts
                 query = sql.SQL("""
                     SELECT id, username, content, created_at 
                     FROM posts
@@ -97,7 +92,7 @@ def get_all_posts():
         print(f"Unexpected error: {e}")
         return []
 
-# Add these new database functions
+
 def follow_user(follower, following):
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
@@ -108,6 +103,7 @@ def follow_user(follower, following):
                 return result, "Followed successfully" if result else "Already following"
     except Exception as e:
         return False, f"Error: {str(e)}"
+
 
 def unfollow_user(follower, following):
     try:
@@ -120,6 +116,7 @@ def unfollow_user(follower, following):
     except Exception as e:
         return False, f"Error: {str(e)}"
 
+
 def is_following(follower, following):
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
@@ -129,6 +126,7 @@ def is_following(follower, following):
     except Exception as e:
         print(f"Error checking follow status: {e}")
         return False
+
 
 def get_following(username):
     try:
@@ -140,6 +138,7 @@ def get_following(username):
         print(f"Error getting following list: {e}")
         return []
 
+
 def get_followers(username):
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
@@ -150,6 +149,7 @@ def get_followers(username):
         print(f"Error getting followers list: {e}")
         return []
 
+
 def get_followed_posts(username):
     try:
         with psycopg2.connect(**DB_PARAMS) as conn:
@@ -159,6 +159,47 @@ def get_followed_posts(username):
     except Exception as e:
         print(f"Error getting followed posts: {e}")
         return []
+
+
+def send_message(sender, receiver, content):
+    """Send a direct message from sender to receiver"""
+    if not content.strip():
+        return False, "Message content cannot be empty"
+
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT send_message(%s, %s, %s)", (sender, receiver, content))
+                conn.commit()
+                return True, "Message sent successfully"
+    except Exception as e:
+        return False, f"Error sending message: {str(e)}"
+
+
+def get_conversation(user1, user2):
+    """Get conversation between two users"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM get_conversation(%s, %s)", (user1, user2))
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting conversation: {e}")
+        return []
+
+
+def get_user_conversations(username):
+    """Get all conversations for a user"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM get_user_conversations(%s)", (username,))
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting user conversations: {e}")
+        return []
+
+
 class RegistrationApp(QWidget):
     def __init__(self, stacked_widget):
         super().__init__()
@@ -239,7 +280,7 @@ class LoginApp(QWidget):
         self.login_button.clicked.connect(self.handle_login)
 
         self.register_button = QPushButton('Need an account? Register')
-        self.register_button.clicked.connect(self.switch_to_register)  # This line was correct
+        self.register_button.clicked.connect(self.switch_to_register)
 
         layout.addWidget(self.username_label)
         layout.addWidget(self.username_input)
@@ -273,7 +314,6 @@ class LoginApp(QWidget):
             msg.setIcon(QMessageBox.Information)
             msg.setText(message)
             msg.exec_()
-            # Switch to main app and pass the username
             self.stacked_widget.widget(2).set_user(username)
             self.stacked_widget.setCurrentIndex(2)
         else:
@@ -287,11 +327,10 @@ class MainApp(QWidget):
         super().__init__()
         self.stacked_widget = stacked_widget
         self.username = None
-        self.current_profile_view = None  # Track which profile we're viewing
+        self.current_profile_view = None
         self.init_ui()
 
     def set_user(self, username):
-        """Set the current user information"""
         self.username = username
         self.welcome_label.setText(f"Welcome, {self.username}!")
         self.refresh_feed()
@@ -299,16 +338,17 @@ class MainApp(QWidget):
     def init_ui(self):
         layout = QVBoxLayout()
 
-        # Welcome label
         self.welcome_label = QLabel("Welcome to the Application!")
         layout.addWidget(self.welcome_label)
 
-        # Add profile button
+        self.messages_btn = QPushButton("Messages")
+        self.messages_btn.clicked.connect(self.show_messages)
+        layout.addWidget(self.messages_btn)
+
         self.profile_btn = QPushButton("My Profile")
         self.profile_btn.clicked.connect(self.show_own_profile)
         layout.addWidget(self.profile_btn)
 
-        # Tab buttons
         button_layout = QHBoxLayout()
         self.create_post_btn = QPushButton("Create Post")
         self.create_post_btn.clicked.connect(self.show_create_post)
@@ -320,10 +360,9 @@ class MainApp(QWidget):
         button_layout.addWidget(self.feed_btn)
         button_layout.addWidget(self.following_feed_btn)
         layout.addLayout(button_layout)
-        # Stacked widget for different views
+
         self.main_stack = QStackedWidget()
 
-        # Create post view
         self.post_widget = QWidget()
         post_layout = QVBoxLayout()
         self.post_content = QTextEdit()
@@ -334,22 +373,17 @@ class MainApp(QWidget):
         post_layout.addWidget(post_submit_btn)
         self.post_widget.setLayout(post_layout)
 
-        # Feed view
         self.feed_widget = QWidget()
         feed_layout = QVBoxLayout()
-
-        # Scroll area for feed
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
         self.scroll_layout = QVBoxLayout(scroll_content)
         self.scroll_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(scroll_content)
-
         feed_layout.addWidget(scroll)
         self.feed_widget.setLayout(feed_layout)
 
-        # Add widgets to stack
         self.main_stack.addWidget(self.post_widget)
         self.main_stack.addWidget(self.feed_widget)
 
@@ -357,10 +391,8 @@ class MainApp(QWidget):
         self.setLayout(layout)
 
     def show_following_feed(self):
-        """Show only posts from users the current user follows"""
-        self.main_stack.setCurrentIndex(1)  # Show the feed view
+        self.main_stack.setCurrentIndex(1)
         self.refresh_feed(following_only=True)
-
 
     def show_create_post(self):
         self.main_stack.setCurrentIndex(0)
@@ -368,6 +400,10 @@ class MainApp(QWidget):
     def show_feed(self):
         self.main_stack.setCurrentIndex(1)
         self.refresh_feed()
+
+    def show_messages(self):
+        dialog = MessageDialog(self.username, self)
+        dialog.exec_()
 
     def submit_post(self):
         content = self.post_content.toPlainText().strip()
@@ -385,13 +421,11 @@ class MainApp(QWidget):
         msg.exec_()
 
     def refresh_feed(self, following_only=False):
-        # Clear existing feed
         for i in reversed(range(self.scroll_layout.count())):
             widget = self.scroll_layout.itemAt(i).widget()
             if widget:
                 widget.setParent(None)
 
-        # Get posts
         if following_only:
             posts = get_followed_posts(self.username)
             if not posts:
@@ -410,7 +444,6 @@ class MainApp(QWidget):
             post_widget = QWidget()
             post_layout = QVBoxLayout()
 
-            # Header with username and timestamp
             header = QHBoxLayout()
             username_btn = QPushButton(username)
             username_btn.setStyleSheet("border: none; color: blue; text-align: left;")
@@ -419,12 +452,10 @@ class MainApp(QWidget):
             header.addStretch()
             header.addWidget(QLabel(created_at.strftime('%Y-%m-%d %H:%M')))
 
-            # Content
             content_label = QLabel(content)
             content_label.setWordWrap(True)
             content_label.setStyleSheet("padding: 5px;")
 
-            # Follow button (if viewing someone else's post)
             if username != self.username:
                 follow_btn = QPushButton()
                 follow_btn.setCheckable(True)
@@ -433,7 +464,6 @@ class MainApp(QWidget):
                 follow_btn.clicked.connect(lambda _, u=username: self.toggle_follow(u))
                 post_layout.addWidget(follow_btn)
 
-            # Separator
             separator = QFrame()
             separator.setFrameShape(QFrame.HLine)
             separator.setFrameShadow(QFrame.Sunken)
@@ -456,6 +486,8 @@ class MainApp(QWidget):
         msg.setText(message)
         msg.exec_()
         self.refresh_feed()
+        if self.current_profile_view:
+            self.show_user_profile(self.current_profile_view)
 
     def show_user_profile(self, username):
         self.current_profile_view = username
@@ -463,11 +495,14 @@ class MainApp(QWidget):
         profile_dialog.setWindowTitle(f"{username}'s Profile")
         layout = QVBoxLayout()
 
-        # Profile header
         header = QHBoxLayout()
         header.addWidget(QLabel(f"Username: {username}"))
 
-        # Follow button (if not viewing own profile)
+        if username != self.username:
+            message_btn = QPushButton("Message")
+            message_btn.clicked.connect(lambda: self.open_message_to_user(username))
+            header.addWidget(message_btn)
+
         if username != self.username:
             follow_btn = QPushButton()
             follow_btn.setCheckable(True)
@@ -478,7 +513,6 @@ class MainApp(QWidget):
 
         layout.addLayout(header)
 
-        # Stats
         stats = QHBoxLayout()
         followers = get_followers(username)
         following = get_following(username)
@@ -486,7 +520,6 @@ class MainApp(QWidget):
         stats.addWidget(QLabel(f"Following: {len(following)}"))
         layout.addLayout(stats)
 
-        # User's posts
         posts_label = QLabel("Posts:")
         layout.addWidget(posts_label)
 
@@ -516,17 +549,145 @@ class MainApp(QWidget):
         profile_dialog.setLayout(layout)
         profile_dialog.exec_()
 
+    def open_message_to_user(self, username):
+        dialog = MessageDialog(self.username, self)
+        dialog.start_conversation(username)
+        dialog.exec_()
+
     def show_own_profile(self):
         self.show_user_profile(self.username)
 
 
+class MessageDialog(QDialog):
+    def __init__(self, username, parent=None):
+        super().__init__(parent)
+        self.username = username
+        self.current_conversation = None
+        self.setWindowTitle("Messages")
+        self.setMinimumSize(600, 400)
+        self.init_ui()
+        self.load_conversations()
+
+    def init_ui(self):
+        layout = QHBoxLayout()
+
+        # Left panel - conversation list
+        self.conversation_list = QListWidget()
+        self.conversation_list.itemClicked.connect(self.open_conversation)
+        layout.addWidget(self.conversation_list, 1)
+
+        # Right panel - conversation view
+        right_panel = QVBoxLayout()
+
+        # Conversation header
+        self.conversation_header = QLabel("Select a conversation")
+        right_panel.addWidget(self.conversation_header)
+
+        # Messages display
+        self.messages_display = QTextEdit()
+        self.messages_display.setReadOnly(True)
+        right_panel.addWidget(self.messages_display, 1)
+
+        # Message input area
+        input_layout = QHBoxLayout()
+        self.message_input = QTextEdit()
+        self.message_input.setMaximumHeight(80)
+        self.message_input.setPlaceholderText("Type your message here...")
+        input_layout.addWidget(self.message_input, 1)
+
+        self.send_button = QPushButton("Send")
+        self.send_button.clicked.connect(self.send_message)
+        input_layout.addWidget(self.send_button)
+
+        right_panel.addLayout(input_layout)
+        layout.addLayout(right_panel, 2)
+
+        self.setLayout(layout)
+
+    def load_conversations(self):
+        self.conversation_list.clear()
+        conversations = get_user_conversations(self.username)
+
+        for conv in conversations:
+            other_user, last_msg, timestamp, unread = conv
+            item_text = f"{other_user}"
+            if unread > 0:
+                item_text += f" ({unread} new)"
+
+            item = QListWidgetItem(item_text)
+            if unread > 0:
+                item.setForeground(Qt.blue)
+            self.conversation_list.addItem(item)
+
+    def start_conversation(self, username):
+        # Find if conversation already exists
+        for i in range(self.conversation_list.count()):
+            item = self.conversation_list.item(i)
+            if item.text().startswith(username):
+                self.conversation_list.setCurrentItem(item)
+                self.open_conversation(item)
+                return
+
+        # If not, create a new one
+        self.current_conversation = username
+        self.update_conversation_view()
+
+    def open_conversation(self, item):
+        other_user = item.text().split()[0]  # Remove "(X new)" if present
+        self.current_conversation = other_user
+        self.update_conversation_view()
+
+    def update_conversation_view(self):
+        if not self.current_conversation:
+            return
+
+        self.conversation_header.setText(f"Conversation with {self.current_conversation}")
+        self.messages_display.clear()
+
+        messages = get_conversation(self.username, self.current_conversation)
+
+        for msg in messages:
+            msg_id, sender, content, timestamp, is_read = msg
+            alignment = "left" if sender != self.username else "right"
+            color = "#e1f5fe" if sender != self.username else "#e8f5e9"
+
+            message_html = f"""
+            <div style="margin: 5px; padding: 8px; background-color: {color}; 
+                        border-radius: 8px; text-align: {alignment};">
+                <div><b>{sender}:</b></div>
+                <div>{content}</div>
+                <div style="font-size: small; color: gray;">{timestamp.strftime('%Y-%m-%d %H:%M')}</div>
+            </div>
+            """
+            self.messages_display.append(message_html)
+
+        # Scroll to bottom
+        self.messages_display.verticalScrollBar().setValue(
+            self.messages_display.verticalScrollBar().maximum()
+        )
+
+    def send_message(self):
+        if not self.current_conversation:
+            QMessageBox.warning(self, "Warning", "No conversation selected")
+            return
+
+        content = self.message_input.toPlainText().strip()
+        if not content:
+            return
+
+        success, message = send_message(self.username, self.current_conversation, content)
+        if success:
+            self.message_input.clear()
+            self.update_conversation_view()
+            self.load_conversations()
+        else:
+            QMessageBox.warning(self, "Error", message)
+
+
 if __name__ == '__main__':
     app = QApplication([])
-
-    # Create a stacked widget to handle multiple screens
     stacked_widget = QStackedWidget()
 
-    # Create and add the registration and login screens
     registration_app = RegistrationApp(stacked_widget)
     login_app = LoginApp(stacked_widget)
     main_app = MainApp(stacked_widget)
@@ -535,7 +696,7 @@ if __name__ == '__main__':
     stacked_widget.addWidget(login_app)
     stacked_widget.addWidget(main_app)
 
-    stacked_widget.setCurrentIndex(1)  # Start with login screen
+    stacked_widget.setCurrentIndex(1)
     stacked_widget.setWindowTitle('Social Media App')
     stacked_widget.setFixedSize(500, 400)
     stacked_widget.show()
