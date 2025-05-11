@@ -2,7 +2,8 @@ import psycopg2
 from psycopg2 import sql, errors
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel,
                              QLineEdit, QPushButton, QMessageBox, QStackedWidget,
-                             QTextEdit, QHBoxLayout, QScrollArea, QFrame, QDialog, QListWidgetItem, QListWidget)
+                             QTextEdit, QHBoxLayout, QScrollArea, QFrame, QDialog, QListWidgetItem, QListWidget,
+                             QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt
 import datetime
 
@@ -67,6 +68,33 @@ def create_post(username, content):
                 cur.execute(query, (username, content))
                 conn.commit()
                 return True, "Post created successfully"
+    except errors.DatabaseError as e:
+        return False, f"Database error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
+def delete_post(post_id, username):
+    """Delete a post from the database if the user is the owner"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                # First check if the user owns the post
+                query = sql.SQL("SELECT username FROM posts WHERE id = %s")
+                cur.execute(query, (post_id,))
+                result = cur.fetchone()
+
+                if not result:
+                    return False, "Post not found"
+
+                if result[0] != username:
+                    return False, "You can only delete your own posts"
+
+                # Delete the post
+                query = sql.SQL("DELETE FROM posts WHERE id = %s")
+                cur.execute(query, (post_id,))
+                conn.commit()
+                return True, "Post deleted successfully"
     except errors.DatabaseError as e:
         return False, f"Database error: {e}"
     except Exception as e:
@@ -200,6 +228,244 @@ def get_user_conversations(username):
         return []
 
 
+def check_admin_credentials(username, password):
+    """Check if the credentials match the admin account"""
+    return username == "umbreon" and password == "3141592654"
+
+
+def get_all_users():
+    """Get all users from the database"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                query = sql.SQL("SELECT username, password FROM users")
+                cur.execute(query)
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting users: {e}")
+        return []
+
+
+def get_all_posts_admin():
+    """Get all posts with usernames for admin view"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                query = sql.SQL("""
+                    SELECT id, username, content, created_at 
+                    FROM posts
+                    ORDER BY created_at DESC
+                """)
+                cur.execute(query)
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting posts: {e}")
+        return []
+
+
+def delete_user_admin(username):
+    """Delete a user and move to recently_deleted_users"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                # First get user data
+                cur.execute("SELECT username, password FROM users WHERE username = %s", (username,))
+                user_data = cur.fetchone()
+                if not user_data:
+                    return False, "User not found"
+
+                # Get and move user's posts to recently_deleted_posts
+                cur.execute("""
+                    INSERT INTO recently_deleted_posts (id, username, content, created_at, deleted_at)
+                    SELECT id, username, content, created_at, CURRENT_TIMESTAMP
+                    FROM posts
+                    WHERE username = %s
+                """, (username,))
+
+                # Delete related records
+                # Delete follows where user is follower
+                cur.execute("DELETE FROM follows WHERE follower_username = %s", (username,))
+                # Delete follows where user is following
+                cur.execute("DELETE FROM follows WHERE following_username = %s", (username,))
+                # Delete user's posts
+                cur.execute("DELETE FROM posts WHERE username = %s", (username,))
+                # Delete conversations
+                cur.execute("DELETE FROM conversations WHERE user1_username = %s OR user2_username = %s",
+                            (username, username))
+                # Delete direct messages
+                cur.execute("DELETE FROM direct_messages WHERE sender_username = %s OR receiver_username = %s",
+                            (username, username))
+
+                # Delete from users first
+                cur.execute("DELETE FROM users WHERE username = %s", (username,))
+
+                # Then insert into recently_deleted_users
+                cur.execute("""
+                    INSERT INTO recently_deleted_users (username, password, deleted_at)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                """, user_data)
+
+                conn.commit()
+                return True, "User deleted successfully"
+    except Exception as e:
+        return False, f"Error deleting user: {str(e)}"
+
+
+def delete_post_admin(post_id):
+    """Delete a post and move to recently_deleted_posts"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                # First get post data
+                cur.execute("""
+                    SELECT id, username, content, created_at 
+                    FROM posts WHERE id = %s
+                """, (post_id,))
+                post_data = cur.fetchone()
+                if not post_data:
+                    return False, "Post not found"
+
+                # Insert into recently_deleted_posts
+                cur.execute("""
+                    INSERT INTO recently_deleted_posts (id, username, content, created_at, deleted_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                """, post_data)
+
+                # Delete from posts
+                cur.execute("DELETE FROM posts WHERE id = %s", (post_id,))
+                conn.commit()
+                return True, "Post deleted successfully"
+    except Exception as e:
+        return False, f"Error deleting post: {str(e)}"
+
+
+def get_recently_deleted_users():
+    """Get all recently deleted users"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                query = sql.SQL("""
+                    SELECT username, deleted_at 
+                    FROM recently_deleted_users
+                    ORDER BY deleted_at DESC
+                """)
+                cur.execute(query)
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting recently deleted users: {e}")
+        return []
+
+
+def get_recently_deleted_posts():
+    """Get all recently deleted posts"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                query = sql.SQL("""
+                    SELECT id, username, content, created_at, deleted_at 
+                    FROM recently_deleted_posts
+                    ORDER BY deleted_at DESC
+                """)
+                cur.execute(query)
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error getting recently deleted posts: {e}")
+        return []
+
+
+def recover_user(username):
+    """Recover a user from recently_deleted_users"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                # Get user data
+                cur.execute("""
+                    SELECT username, password 
+                    FROM recently_deleted_users 
+                    WHERE username = %s
+                """, (username,))
+                user_data = cur.fetchone()
+                if not user_data:
+                    return False, "User not found in deleted users"
+
+                # Insert back into users
+                cur.execute("""
+                    INSERT INTO users (username, password)
+                    VALUES (%s, %s)
+                """, user_data)
+
+                # Recover user's posts
+                cur.execute("""
+                    INSERT INTO posts (id, username, content, created_at)
+                    SELECT id, username, content, created_at
+                    FROM recently_deleted_posts
+                    WHERE username = %s
+                """, (username,))
+
+                # Delete from recently_deleted_users
+                cur.execute("DELETE FROM recently_deleted_users WHERE username = %s", (username,))
+                # Delete from recently_deleted_posts
+                cur.execute("DELETE FROM recently_deleted_posts WHERE username = %s", (username,))
+
+                conn.commit()
+                return True, "User and their posts recovered successfully"
+    except Exception as e:
+        return False, f"Error recovering user: {str(e)}"
+
+
+def recover_post(post_id):
+    """Recover a post from recently_deleted_posts"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                # Get post data
+                cur.execute("""
+                    SELECT id, username, content, created_at 
+                    FROM recently_deleted_posts 
+                    WHERE id = %s
+                """, (post_id,))
+                post_data = cur.fetchone()
+                if not post_data:
+                    return False, "Post not found in deleted posts"
+
+                # Insert back into posts
+                cur.execute("""
+                    INSERT INTO posts (id, username, content, created_at)
+                    VALUES (%s, %s, %s, %s)
+                """, post_data)
+
+                # Delete from recently_deleted_posts
+                cur.execute("DELETE FROM recently_deleted_posts WHERE id = %s", (post_id,))
+                conn.commit()
+                return True, "Post recovered successfully"
+    except Exception as e:
+        return False, f"Error recovering post: {str(e)}"
+
+
+def permanently_delete_user(username):
+    """Permanently delete a user from recently_deleted_users"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM recently_deleted_users WHERE username = %s", (username,))
+                conn.commit()
+                return True, "User permanently deleted"
+    except Exception as e:
+        return False, f"Error permanently deleting user: {str(e)}"
+
+
+def permanently_delete_post(post_id):
+    """Permanently delete a post from recently_deleted_posts"""
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM recently_deleted_posts WHERE id = %s", (post_id,))
+                conn.commit()
+                return True, "Post permanently deleted"
+    except Exception as e:
+        return False, f"Error permanently deleting post: {str(e)}"
+
+
 class RegistrationApp(QWidget):
     def __init__(self, stacked_widget):
         super().__init__()
@@ -307,6 +573,14 @@ class LoginApp(QWidget):
             msg.exec_()
             return
 
+        # Check for admin credentials first
+        if check_admin_credentials(username, password):
+            self.stacked_widget.setCurrentIndex(3)  # Switch to admin interface
+            self.username_input.clear()
+            self.password_input.clear()
+            return
+
+        # Regular user login
         success, message, username = check_credentials(username, password)
 
         msg = QMessageBox()
@@ -338,8 +612,15 @@ class MainApp(QWidget):
     def init_ui(self):
         layout = QVBoxLayout()
 
+        # Add header with welcome message and logout button
+        header_layout = QHBoxLayout()
         self.welcome_label = QLabel("Welcome to the Application!")
-        layout.addWidget(self.welcome_label)
+        self.logout_btn = QPushButton("Logout")
+        self.logout_btn.clicked.connect(self.handle_logout)
+        header_layout.addWidget(self.welcome_label)
+        header_layout.addStretch()
+        header_layout.addWidget(self.logout_btn)
+        layout.addLayout(header_layout)
 
         self.messages_btn = QPushButton("Messages")
         self.messages_btn.clicked.connect(self.show_messages)
@@ -450,6 +731,14 @@ class MainApp(QWidget):
             username_btn.clicked.connect(lambda _, u=username: self.show_user_profile(u))
             header.addWidget(username_btn)
             header.addStretch()
+
+            # Add delete button if the post belongs to the current user
+            if username == self.username:
+                delete_btn = QPushButton("Delete")
+                delete_btn.setStyleSheet("color: red;")
+                delete_btn.clicked.connect(lambda _, pid=post_id: self.confirm_delete_post(pid))
+                header.addWidget(delete_btn)
+
             header.addWidget(QLabel(created_at.strftime('%Y-%m-%d %H:%M')))
 
             content_label = QLabel(content)
@@ -474,6 +763,27 @@ class MainApp(QWidget):
 
             post_widget.setLayout(post_layout)
             self.scroll_layout.addWidget(post_widget)
+
+    def confirm_delete_post(self, post_id):
+        """Show confirmation dialog before deleting a post"""
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Question)
+        msg.setText("Are you sure you want to delete this post?")
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+
+        if msg.exec_() == QMessageBox.Yes:
+            success, message = delete_post(post_id, self.username)
+
+            result_msg = QMessageBox()
+            if success:
+                result_msg.setIcon(QMessageBox.Information)
+                self.refresh_feed()
+            else:
+                result_msg.setIcon(QMessageBox.Warning)
+
+            result_msg.setText(message)
+            result_msg.exec_()
 
     def toggle_follow(self, username):
         if is_following(self.username, username):
@@ -556,6 +866,18 @@ class MainApp(QWidget):
 
     def show_own_profile(self):
         self.show_user_profile(self.username)
+
+    def handle_logout(self):
+        # Clear the current user
+        self.username = None
+        # Clear any existing data
+        self.post_content.clear()
+        # Switch back to login screen
+        self.stacked_widget.setCurrentIndex(1)
+        # Clear the login form
+        login_widget = self.stacked_widget.widget(1)
+        login_widget.username_input.clear()
+        login_widget.password_input.clear()
 
 
 class MessageDialog(QDialog):
@@ -684,6 +1006,195 @@ class MessageDialog(QDialog):
             QMessageBox.warning(self, "Error", message)
 
 
+class AdminApp(QWidget):
+    def __init__(self, stacked_widget):
+        super().__init__()
+        self.stacked_widget = stacked_widget
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        # Header
+        header = QHBoxLayout()
+        self.title_label = QLabel("Admin Dashboard")
+        self.title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
+        self.logout_btn = QPushButton("Logout")
+        self.logout_btn.clicked.connect(self.handle_logout)
+        header.addWidget(self.title_label)
+        header.addStretch()
+        header.addWidget(self.logout_btn)
+        layout.addLayout(header)
+
+        # View selection buttons
+        view_layout = QHBoxLayout()
+        self.users_btn = QPushButton("Users")
+        self.posts_btn = QPushButton("Posts")
+        self.recently_deleted_btn = QPushButton("Recently Deleted")
+
+        self.users_btn.clicked.connect(lambda: self.show_view("users"))
+        self.posts_btn.clicked.connect(lambda: self.show_view("posts"))
+        self.recently_deleted_btn.clicked.connect(lambda: self.show_view("recently_deleted"))
+
+        view_layout.addWidget(self.users_btn)
+        view_layout.addWidget(self.posts_btn)
+        view_layout.addWidget(self.recently_deleted_btn)
+        layout.addLayout(view_layout)
+
+        # Table view
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["ID", "Username", "Content", "Date"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+        self.delete_btn = QPushButton("Delete")
+        self.recover_btn = QPushButton("Recover")
+        self.permanent_delete_btn = QPushButton("Delete Permanently")
+
+        self.delete_btn.clicked.connect(self.delete_item)
+        self.recover_btn.clicked.connect(self.recover_item)
+        self.permanent_delete_btn.clicked.connect(self.permanent_delete_item)
+
+        button_layout.addWidget(self.delete_btn)
+        button_layout.addWidget(self.recover_btn)
+        button_layout.addWidget(self.permanent_delete_btn)
+        layout.addLayout(button_layout)
+
+        self.setLayout(layout)
+        self.current_view = "users"
+        self.show_view("users")
+
+    def show_view(self, view_type):
+        self.current_view = view_type
+        self.table.setRowCount(0)
+
+        if view_type == "users":
+            users = get_all_users()
+            self.table.setColumnCount(2)
+            self.table.setHorizontalHeaderLabels(["Username", "Password"])
+            for user in users:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.table.setItem(row, 0, QTableWidgetItem(user[0]))
+                self.table.setItem(row, 1, QTableWidgetItem(user[1]))
+
+        elif view_type == "posts":
+            posts = get_all_posts_admin()
+            self.table.setColumnCount(4)
+            self.table.setHorizontalHeaderLabels(["ID", "Username", "Content", "Date"])
+            for post in posts:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.table.setItem(row, 0, QTableWidgetItem(str(post[0])))
+                self.table.setItem(row, 1, QTableWidgetItem(post[1]))
+                self.table.setItem(row, 2, QTableWidgetItem(post[2]))
+                self.table.setItem(row, 3, QTableWidgetItem(str(post[3])))
+
+        elif view_type == "recently_deleted":
+            self.table.setColumnCount(5)
+            self.table.setHorizontalHeaderLabels(["ID", "Username", "Content", "Deleted At", "Type"])
+
+            # Show recently deleted users
+            deleted_users = get_recently_deleted_users()
+            for user in deleted_users:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.table.setItem(row, 0, QTableWidgetItem(""))
+                self.table.setItem(row, 1, QTableWidgetItem(user[0]))
+                self.table.setItem(row, 2, QTableWidgetItem(""))
+                self.table.setItem(row, 3, QTableWidgetItem(str(user[1])))
+                self.table.setItem(row, 4, QTableWidgetItem("User"))
+
+            # Show recently deleted posts
+            deleted_posts = get_recently_deleted_posts()
+            for post in deleted_posts:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.table.setItem(row, 0, QTableWidgetItem(str(post[0])))
+                self.table.setItem(row, 1, QTableWidgetItem(post[1]))
+                self.table.setItem(row, 2, QTableWidgetItem(post[2]))
+                self.table.setItem(row, 3, QTableWidgetItem(str(post[4])))
+                self.table.setItem(row, 4, QTableWidgetItem("Post"))
+
+        # Update button visibility
+        self.delete_btn.setVisible(view_type != "recently_deleted")
+        self.recover_btn.setVisible(view_type == "recently_deleted")
+        self.permanent_delete_btn.setVisible(view_type == "recently_deleted")
+
+    def delete_item(self):
+        current_row = self.table.currentRow()
+        if current_row < 0:
+            QMessageBox.warning(self, "Warning", "Please select an item to delete")
+            return
+
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Question)
+        msg.setText("Are you sure you want to delete this item?")
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+
+        if msg.exec_() == QMessageBox.Yes:
+            if self.current_view == "users":
+                username = self.table.item(current_row, 0).text()
+                success, message = delete_user_admin(username)
+            else:
+                post_id = int(self.table.item(current_row, 0).text())
+                success, message = delete_post_admin(post_id)
+
+            if success:
+                self.show_view(self.current_view)
+            QMessageBox.information(self, "Result", message)
+
+    def recover_item(self):
+        current_row = self.table.currentRow()
+        if current_row < 0:
+            QMessageBox.warning(self, "Warning", "Please select an item to recover")
+            return
+
+        item_type = self.table.item(current_row, 4).text()
+        if item_type == "User":
+            username = self.table.item(current_row, 1).text()
+            success, message = recover_user(username)
+        else:
+            post_id = int(self.table.item(current_row, 0).text())
+            success, message = recover_post(post_id)
+
+        if success:
+            self.show_view("recently_deleted")
+        QMessageBox.information(self, "Result", message)
+
+    def permanent_delete_item(self):
+        current_row = self.table.currentRow()
+        if current_row < 0:
+            QMessageBox.warning(self, "Warning", "Please select an item to delete permanently")
+            return
+
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Question)
+        msg.setText("Are you sure you want to permanently delete this item? This action cannot be undone.")
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+
+        if msg.exec_() == QMessageBox.Yes:
+            item_type = self.table.item(current_row, 4).text()
+            if item_type == "User":
+                username = self.table.item(current_row, 1).text()
+                success, message = permanently_delete_user(username)
+            else:
+                post_id = int(self.table.item(current_row, 0).text())
+                success, message = permanently_delete_post(post_id)
+
+            if success:
+                self.show_view("recently_deleted")
+            QMessageBox.information(self, "Result", message)
+
+    def handle_logout(self):
+        self.stacked_widget.setCurrentIndex(1)
+
+
 if __name__ == '__main__':
     app = QApplication([])
     stacked_widget = QStackedWidget()
@@ -691,10 +1202,12 @@ if __name__ == '__main__':
     registration_app = RegistrationApp(stacked_widget)
     login_app = LoginApp(stacked_widget)
     main_app = MainApp(stacked_widget)
+    admin_app = AdminApp(stacked_widget)  # Add admin app
 
     stacked_widget.addWidget(registration_app)
     stacked_widget.addWidget(login_app)
     stacked_widget.addWidget(main_app)
+    stacked_widget.addWidget(admin_app)  # Add admin app to stacked widget
 
     stacked_widget.setCurrentIndex(1)
     stacked_widget.setWindowTitle('Social Media App')
