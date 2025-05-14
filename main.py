@@ -41,7 +41,7 @@ DB_PARAMS = {
 }
 
 # Firebase configuration - UPDATE WITH YOUR ACTUAL CREDENTIALS FILE PATH
-FIREBASE_CREDENTIALS_PATH = 'firebase-credentials.json'
+FIREBASE_CREDENTIALS_PATH = 'firebase_credentials.json'
 
 
 def get_firebase_db_url(json_path):
