@@ -6,7 +6,7 @@ import firebase_admin
 from firebase_admin import credentials, db as firebase_db
 from config import DB_PARAMS
 
-FIREBASE_CREDENTIALS_PATH = 'firebase_credentials.json'
+FIREBASE_CREDENTIALS_PATH = '/Users/riyan/Desktop/firebase-credentials.json'
 
 def get_firebase_db_url(json_path):
     try:
